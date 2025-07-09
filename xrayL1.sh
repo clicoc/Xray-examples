@@ -3,6 +3,8 @@
 DEFAULT_START_PORT=20000
 DEFAULT_SOCKS_USERNAME="userb"
 DEFAULT_SOCKS_PASSWORD="passwordb"
+DEFAULT_HTTP_USERNAME="userb"
+DEFAULT_HTTP_PASSWORD="passwordb"
 DEFAULT_WS_PATH="/ws"
 DEFAULT_UUID=$(cat /proc/sys/kernel/random/uuid)
 IP_ADDRESSES=($(hostname -I))
@@ -37,28 +39,39 @@ EOF
 config_xray() {
 	config_type=$1
 	mkdir -p /etc/xrayL
-	if [ "$config_type" != "socks" ] && [ "$config_type" != "vmess" ]; then
-		echo "类型错误！仅支持 socks 和 vmess."
+	if [[ "$config_type" != "socks" && "$config_type" != "http" && "$config_type" != "vmess" ]]; then
+		echo "类型错误！仅支持 socks / http / vmess."
 		exit 1
 	fi
 
 	read -p "起始端口 (默认 $DEFAULT_START_PORT): " START_PORT
 	START_PORT=${START_PORT:-$DEFAULT_START_PORT}
 
-	if [ "$config_type" == "socks" ]; then
+	# socks & http 公用的认证设置
+	if [[ "$config_type" == "socks" || "$config_type" == "http" ]]; then
 		read -p "是否启用认证 (yes/no)? 默认 no: " ENABLE_AUTH
 		ENABLE_AUTH=${ENABLE_AUTH:-no}
 
 		if [[ "$ENABLE_AUTH" =~ ^(yes|y|Y)$ ]]; then
 			AUTH_MODE="password"
-			read -p "SOCKS 账号 (默认 $DEFAULT_SOCKS_USERNAME): " SOCKS_USERNAME
-			SOCKS_USERNAME=${SOCKS_USERNAME:-$DEFAULT_SOCKS_USERNAME}
-			read -p "SOCKS 密码 (默认 $DEFAULT_SOCKS_PASSWORD): " SOCKS_PASSWORD
-			SOCKS_PASSWORD=${SOCKS_PASSWORD:-$DEFAULT_SOCKS_PASSWORD}
+			if [ "$config_type" == "socks" ]; then
+				read -p "SOCKS 账号 (默认 $DEFAULT_SOCKS_USERNAME): " SOCKS_USERNAME
+				SOCKS_USERNAME=${SOCKS_USERNAME:-$DEFAULT_SOCKS_USERNAME}
+				read -p "SOCKS 密码 (默认 $DEFAULT_SOCKS_PASSWORD): " SOCKS_PASSWORD
+				SOCKS_PASSWORD=${SOCKS_PASSWORD:-$DEFAULT_SOCKS_PASSWORD}
+			else
+				read -p "HTTP 账号 (默认 $DEFAULT_HTTP_USERNAME): " HTTP_USERNAME
+				HTTP_USERNAME=${HTTP_USERNAME:-$DEFAULT_HTTP_USERNAME}
+				read -p "HTTP 密码 (默认 $DEFAULT_HTTP_PASSWORD): " HTTP_PASSWORD
+				HTTP_PASSWORD=${HTTP_PASSWORD:-$DEFAULT_HTTP_PASSWORD}
+			fi
 		else
 			AUTH_MODE="noauth"
 		fi
-	elif [ "$config_type" == "vmess" ]; then
+	fi
+
+	# vmess 配置项
+	if [ "$config_type" == "vmess" ]; then
 		read -p "UUID (默认随机): " UUID
 		UUID=${UUID:-$DEFAULT_UUID}
 		read -p "WebSocket 路径 (默认 $DEFAULT_WS_PATH): " WS_PATH
@@ -82,16 +95,24 @@ config_xray() {
 				config_content+="user = \"$SOCKS_USERNAME\"\n"
 				config_content+="pass = \"$SOCKS_PASSWORD\"\n"
 			fi
+		elif [ "$config_type" == "http" ]; then
+			config_content+="auth = \"$AUTH_MODE\"\n"
+			config_content+="timeout = 300\n"
+			if [ "$AUTH_MODE" == "password" ]; then
+				config_content+="[[inbounds.settings.accounts]]\n"
+				config_content+="user = \"$HTTP_USERNAME\"\n"
+				config_content+="pass = \"$HTTP_PASSWORD\"\n"
+			fi
 		elif [ "$config_type" == "vmess" ]; then
 			config_content+="[[inbounds.settings.clients]]\n"
 			config_content+="id = \"$UUID\"\n"
 			config_content+="[inbounds.streamSettings]\n"
 			config_content+="network = \"ws\"\n"
 			config_content+="[inbounds.streamSettings.wsSettings]\n"
-			config_content+="path = \"$WS_PATH\"\n\n"
+			config_content+="path = \"$WS_PATH\"\n"
 		fi
 
-		config_content+="[[outbounds]]\n"
+		config_content+="\n[[outbounds]]\n"
 		config_content+="sendThrough = \"${IP_ADDRESSES[i]}\"\n"
 		config_content+="protocol = \"freedom\"\n"
 		config_content+="tag = \"tag_$((i + 1))\"\n\n"
@@ -115,6 +136,12 @@ config_xray() {
 			echo "账号: $SOCKS_USERNAME"
 			echo "密码: $SOCKS_PASSWORD"
 		fi
+	elif [ "$config_type" == "http" ]; then
+		echo "认证方式: $AUTH_MODE"
+		if [ "$AUTH_MODE" == "password" ]; then
+			echo "账号: $HTTP_USERNAME"
+			echo "密码: $HTTP_PASSWORD"
+		fi
 	elif [ "$config_type" == "vmess" ]; then
 		echo "UUID: $UUID"
 		echo "ws路径: $WS_PATH"
@@ -127,17 +154,18 @@ main() {
 	if [ $# -eq 1 ]; then
 		config_type="$1"
 	else
-		read -p "选择生成的节点类型 (socks/vmess): " config_type
+		read -p "选择生成的节点类型 (socks/http/vmess): " config_type
 	fi
 
-	if [ "$config_type" == "vmess" ]; then
-		config_xray "vmess"
-	elif [ "$config_type" == "socks" ]; then
-		config_xray "socks"
-	else
-		echo "未正确选择类型，使用默认 socks 配置."
-		config_xray "socks"
-	fi
+	case "$config_type" in
+		socks|http|vmess)
+			config_xray "$config_type"
+			;;
+		*)
+			echo "未正确选择类型，默认使用 socks 配置."
+			config_xray "socks"
+			;;
+	esac
 }
 
 main "$@"
